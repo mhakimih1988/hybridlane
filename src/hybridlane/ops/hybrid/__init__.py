@@ -33,6 +33,14 @@ from .parametric_ops_single_qumode import (
     SelectiveQubitRotation,
 )
 
+from .parametric_ops_qudit import (
+    QCD, QCR, QPS, QT,
+    QuditConditionalDisplacement,
+    QuditConditionalRotation,
+    QuditPhaseShift,
+    QuditTransition,
+)
+
 __all__ = [
     "CP",
     "ConditionalParity",
@@ -63,4 +71,12 @@ __all__ = [
     "Rabi",
     "Red",
     "SelectiveQubitRotation",
+    "QCD",
+    "QCR",
+    "QPS",
+    "QT",
+    "QuditConditionalDisplacement",
+    "QuditConditionalRotation",
+    "QuditPhaseShift",
+    "QuditTransition",
 ]
