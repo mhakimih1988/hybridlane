@@ -24,7 +24,7 @@ class Qubit:
 class Qudit:
     """Type representing a qudit with specified dimension"""
 
-    dim: int
+    dim: int = 4  # default 4-level (chromophore encoding)
 
     @property
     def supported_bases(self) -> tuple["ComputationalBasis", ...]:
@@ -203,6 +203,10 @@ class StaticAnalysisResult:
     @property
     def qumodes(self) -> Wires:
         return Wires([w for w, t in self.wire_types.items() if t == Qumode()])
+
+    @property
+    def qudits(self) -> Wires:
+        return Wires([w for w, t in self.wire_types.items() if isinstance(t, Qudit)])
 
     @property
     def wire_order(self) -> Wires:

@@ -27,6 +27,7 @@ from .base import (
     BasisSchema,
     ComputationalBasis,
     Qubit,
+    Qudit,
     Qumode,
     StaticAnalysisResult,
     WireType,
@@ -105,7 +106,11 @@ def _infer_wire_types_from_operators(ops: list[Operator]) -> dict[WiresLike, Wir
         if before_after := _validate_aliased_wires(wire_types, new_wire_types):
             raise StaticAnalysisError(_aliased_wire_msg_helper(before_after, op=op))
 
-        wire_types |= new_wire_types
+        # Merge but preserve Qudit upgrades — don't overwrite Qudit with Qubit
+        for w, t in new_wire_types.items():
+            if w in wire_types and isinstance(wire_types[w], Qudit) and isinstance(t, Qubit):
+                continue  # keep Qudit, ignore Qubit downgrade
+            wire_types[w] = t
 
     return wire_types
 
@@ -272,10 +277,18 @@ def _validate_aliased_wires(
     before_after = {}
     aliased_wires = new_wire_types.keys() & wire_types.keys()
     for wire in aliased_wires:
-        # For repeated wire usage e.g. X(0) Z(0), it could be correct. We have to iterate to
-        # see if any wires are different from previously decided types.
-        if wire_types[wire] != new_wire_types[wire]:
-            before_after[wire] = (wire_types[wire], new_wire_types[wire])
+        old_type = wire_types[wire]
+        new_type = new_wire_types[wire]
+        if old_type == new_type:
+            continue
+        # Allow Qubit <-> Qudit: qudit generalizes qubit
+        # Qubit gates (PauliX) may appear on same wire as qudit gates (QPS)
+        if isinstance(old_type, Qubit) and isinstance(new_type, Qudit):
+            wire_types[wire] = new_type  # upgrade Qubit -> Qudit
+            continue
+        if isinstance(old_type, Qudit) and isinstance(new_type, Qubit):
+            continue  # keep Qudit, ignore downgrade attempt
+        before_after[wire] = (old_type, new_type)
 
     return before_after
 

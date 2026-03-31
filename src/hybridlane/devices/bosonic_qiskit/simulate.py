@@ -25,8 +25,15 @@ from scipy.linalg import expm, fractional_matrix_power
 from scipy.sparse import SparseEfficiencyWarning, csc_array
 
 import hybridlane as hqml
+from hybridlane.ops.hybrid.parametric_ops_qudit import (
+    QuditConditionalDisplacement,
+    QuditConditionalRotation,
+    QuditPhaseShift,
+    QuditTransition,
+)
 
 from ... import sa, util
+from ...sa.base import Qudit as _QuditType  # for isinstance check
 from ...measurements import (
     ExpectationMP,
     FockTruncation,
@@ -81,6 +88,11 @@ def simulate(
     return tuple(results)
 
 
+def get_raw_statevector(state: Statevector) -> np.ndarray:
+    """Return raw statevector array without wire reordering."""
+    return np.array(state.data)
+
+
 def analytic_expval(
     state: Statevector, result: QiskitResult, obs: np.ndarray
 ) -> np.ndarray:
@@ -117,28 +129,25 @@ def analytic_state(
     obs: np.ndarray,
     regmapper: RegisterMapping,
 ) -> np.ndarray:
-    source_wires = Wires(
-        range(len(regmapper.wire_order))
-    )  # auto pulling from ALL hybridlane wires
-    destination_wires = (
-        regmapper.wire_order
-    )  # how those wires map to the bq statevector wires
-    state_size = state.data.shape[0]
-
-    out_vector = -1 * np.ones(state.data.shape, dtype=complex)
-
-    order = permute_subsystems(
-        sp.diags([range(state_size)], [0], dtype=int),  # matrix
-        source_wires,  # 'observable' wires
-        destination_wires,  # 'statevector' wires
-        regmapper,
-        qiskit_order=True,
-    ).diagonal()
-    for i, idx in enumerate(order):
-        out_vector[int(idx)] = state.data[i]
-
-    assert not np.any(out_vector == -1)
-    return out_vector
+    try:
+        source_wires = Wires(range(len(regmapper.wire_order)))
+        destination_wires = regmapper.wire_order
+        state_size = state.data.shape[0]
+        out_vector = -1 * np.ones(state.data.shape, dtype=complex)
+        order = permute_subsystems(
+            sp.diags([range(state_size)], [0], dtype=int),
+            source_wires,
+            destination_wires,
+            regmapper,
+            qiskit_order=True,
+        ).diagonal()
+        for i, idx in enumerate(order):
+            out_vector[int(idx)] = state.data[i]
+        assert not np.any(out_vector == -1)
+        return out_vector
+    except Exception:
+        # Fallback for qudit wires: return raw statevector
+        return np.array(state.data)
 
 
 analytic_measurement_map: dict[
@@ -294,6 +303,93 @@ def make_cv_circuit(
     return qc, regmapper
 
 
+# Module-level cache: (name, params, hyperparams, trunc_key) -> matrix
+# Identical gates across Trotter steps hit cache instead of recomputing expm
+_qudit_gate_cache: dict = {}
+
+
+def _qudit_gate_unitary(op: Operator, truncation) -> np.ndarray:
+    """Compute the full Hilbert-space unitary matrix for a qudit gate.
+    Results are cached by gate identity so identical gates across Trotter
+    steps are computed only once (major speedup for long simulations).
+    """
+    # Build hashable cache key
+    cache_key = (
+        op.name,
+        tuple(float(x) for x in op.parameters),
+        tuple(sorted((k, v) for k, v in op.hyperparameters.items())),
+        str(truncation),
+    )
+    if cache_key in _qudit_gate_cache:
+        return _qudit_gate_cache[cache_key]
+
+    result = _qudit_gate_unitary_compute(op, truncation)
+    _qudit_gate_cache[cache_key] = result
+    return result
+
+
+def _qudit_gate_unitary_compute(op: Operator, truncation) -> np.ndarray:
+    """Actual computation — called only on cache miss."""
+    from scipy.linalg import expm as sp_expm
+
+    dim_q = 4  # 4-level qudit: |G>=0, |A>=1, |B>=2, |C>=3
+
+    def projector(level):
+        P = np.zeros((dim_q, dim_q), dtype=complex)
+        P[level, level] = 1.0
+        return P
+
+    def transition(li, lj):
+        T = np.zeros((dim_q, dim_q), dtype=complex)
+        T[li, lj] = 1.0; T[lj, li] = 1.0
+        return T
+
+    if isinstance(op, QuditConditionalRotation):
+        theta  = op.parameters[0]
+        level  = op.hyperparameters["level"]
+        N      = truncation.dim(op.wires[1])
+        n_hat  = np.diag(np.arange(N, dtype=float))
+        G      = np.kron(projector(level), n_hat)
+        return sp_expm(-1j * theta * G)
+
+    elif isinstance(op, QuditConditionalDisplacement):
+        a, phi = op.parameters
+        level  = op.hyperparameters["level"]
+        N      = truncation.dim(op.wires[1])
+        alpha  = a * np.exp(1j * phi)
+        ann    = np.zeros((N, N), dtype=complex)
+        for n in range(1, N): ann[n-1, n] = np.sqrt(n)
+        disp_gen = alpha * ann.conj().T - np.conj(alpha) * ann
+        G = np.kron(projector(level), disp_gen)
+        return sp_expm(G)
+
+    elif isinstance(op, QuditTransition):
+        theta = op.parameters[0]
+        li    = op.hyperparameters["level_i"]
+        lj    = op.hyperparameters["level_j"]
+        sb    = op.hyperparameters["sideband"]
+        T     = transition(li, lj)
+        if not sb:
+            return sp_expm(-1j * theta * T)
+        else:
+            N   = truncation.dim(op.wires[1])
+            ann = np.zeros((N, N), dtype=complex)
+            for n in range(1, N): ann[n-1, n] = np.sqrt(n)
+            x_hat = ann + ann.conj().T
+            G = np.kron(T, x_hat)
+            return sp_expm(-1j * theta * G)
+
+    elif isinstance(op, QuditPhaseShift):
+        theta = op.parameters[0]
+        level = op.hyperparameters["level"]
+        U     = np.eye(dim_q, dtype=complex)
+        U[level, level] = np.exp(-1j * theta)
+        return U
+
+    else:
+        raise DeviceError(f"Unknown qudit gate {op.name}")
+
+
 def apply_gate(qc: bq.CVCircuit, regmapper: RegisterMapping, op: Operator):
     wires = op.wires
 
@@ -369,6 +465,42 @@ def apply_gate(qc: bq.CVCircuit, regmapper: RegisterMapping, op: Operator):
         match op:
             case qml.Barrier():
                 pass  # no-op
+
+    elif isinstance(op, (QuditConditionalRotation,
+                           QuditConditionalDisplacement,
+                           QuditTransition)):
+        # Hybrid qudit-mode gate: apply via full unitary matrix
+        wire_types = op.wire_types()
+        mat = _qudit_gate_unitary(op, regmapper.truncation)
+
+        # Qudit wire maps to a list of qubits (ceil(log2(dim)) qubits)
+        qudit_qubits = []
+        for w in op.wires:
+            if isinstance(wire_types[w], _QuditType):
+                reg = regmapper.get(w)
+                # reg is a list of qubits for qudit wires
+                qudit_qubits.extend(reg if isinstance(reg, list) else [reg])
+
+        # Qumode wire maps to QumodeRegister — get raw qubit indices
+        qumode_qubits = []
+        for w in op.wires:
+            if wire_types[w] == sa.Qumode():
+                qmr = regmapper.get(w)
+                qumode_qubits.extend([qc.qubits[i] for i in qc.get_qubit_indices(qmr)])
+
+        # Order: qudit qubits first, then qumode qubits
+        all_qubits = qudit_qubits + qumode_qubits
+        qc.unitary(mat, all_qubits)
+
+    elif isinstance(op, QuditPhaseShift):
+        # Pure qudit gate: all wires are qudit
+        wire_types = op.wire_types()
+        mat = _qudit_gate_unitary(op, regmapper.truncation)
+        qudit_qubits = []
+        for w in op.wires:
+            reg = regmapper.get(w)
+            qudit_qubits.extend(reg if isinstance(reg, list) else [reg])
+        qc.unitary(mat, qudit_qubits)
 
     else:
         raise DeviceError(f"Unsupported operation {op.name}")

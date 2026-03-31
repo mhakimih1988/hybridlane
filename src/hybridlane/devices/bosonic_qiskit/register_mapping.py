@@ -39,8 +39,11 @@ class RegisterMapping(Mapping):
         self.axes_map = {}
 
         # Put all qubits into the same register
-        self.qubit_reg = qk.QuantumRegister(len(sa_result.qubits), name="q")
-        for i, wire in enumerate(sa_result.qubits):
+        # Qudit wires also start here (from sa_result.qubits if not yet upgraded)
+        # but need multiple qubits — we handle them separately below
+        pure_qubits = [w for w in sa_result.qubits if w not in list(sa_result.qudits)]
+        self.qubit_reg = qk.QuantumRegister(max(1, len(pure_qubits)), name="q")
+        for i, wire in enumerate(pure_qubits):
             mapping[wire] = self.qubit_reg[i]
             self.axes_map[wire] = (i,)
 
@@ -67,6 +70,23 @@ class RegisterMapping(Mapping):
                     f"Need to specify a truncation for qumode `{wire}`"
                 ) from e
 
+        # Allocate registers for qudit wires
+        # Qudit(dim=d) needs ceil(log2(d)) qubits — uses QuantumRegister (DV)
+        self.qudit_regs = []
+        for i, wire in enumerate(sa_result.qudits):
+            dim = self._truncation.dim(wire)  # set by _infer_truncation
+            required_qubits = int(math.ceil(math.log2(max(dim, 2))))
+            qdreg = qk.QuantumRegister(required_qubits, name=f"d{i}")
+            mapping[wire] = [qdreg[j] for j in range(required_qubits)]
+            self.qudit_regs.append(qdreg)
+            self.axes_map[wire] = tuple(
+                range(
+                    total_num_qubits_created,
+                    total_num_qubits_created + required_qubits,
+                )
+            )
+            total_num_qubits_created += required_qubits
+
         return mapping
 
     @property
@@ -75,7 +95,7 @@ class RegisterMapping(Mapping):
 
     @property
     def regs(self):
-        return [self.qubit_reg] + self.qumode_regs
+        return [self.qubit_reg] + self.qumode_regs + self.qudit_regs
 
     @property
     def truncation(self):

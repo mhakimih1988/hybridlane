@@ -41,6 +41,11 @@ from .parametric_ops_qudit import (
     QuditTransition,
 )
 
+from .observables_qudit import (
+    QLP,
+    QuditLevelProjector,
+)
+
 __all__ = [
     "CP",
     "ConditionalParity",
@@ -79,4 +84,6 @@ __all__ = [
     "QuditConditionalRotation",
     "QuditPhaseShift",
     "QuditTransition",
+    "QLP",
+    "QuditLevelProjector",
 ]

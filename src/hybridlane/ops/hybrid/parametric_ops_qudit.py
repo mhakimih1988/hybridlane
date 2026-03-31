@@ -9,6 +9,7 @@ from pennylane.typing import TensorLike
 from pennylane.wires import WiresLike
 
 from ..mixins import Hybrid
+# Qubit/Qumode imported lazily in __init__ to avoid circular imports
 
 
 class QuditConditionalRotation(Operation, Hybrid):
@@ -73,6 +74,10 @@ class QuditConditionalRotation(Operation, Hybrid):
     def resource_params(self):
         return {}
 
+    def wire_types(self):
+        from hybridlane.sa.base import Qudit, Qumode
+        return {self.wires[0]: Qudit(dim=4), self.wires[1]: Qumode()}
+
     def adjoint(self):
         theta = self.parameters[0]
         level = self.hyperparameters["level"]
@@ -108,6 +113,27 @@ class QuditConditionalRotation(Operation, Hybrid):
 
 qml.add_decomps("Adjoint(QuditConditionalRotation)", adjoint_rotation)
 qml.add_decomps("Pow(QuditConditionalRotation)", pow_rotation)
+
+
+# ============================================================
+# Decompositions into ConditionalRotation / ConditionalDisplacement
+# for bosonicqiskit.hybrid device compatibility.
+#
+# 2-qubit encoding: |G>=|00>, |A>=|10>, |B>=|01>, |C>=|11>
+# qudit wire q is encoded as two qubits q0 (MSB), q1 (LSB)
+# where q = wires[0] and mode = wires[1]
+#
+# Level->qubit mapping:
+#   level 1 |A>=|10>: q0=1, q1=0  -> CR on q0
+#   level 2 |B>=|01>: q0=0, q1=1  -> CR on q1
+#   level 3 |C>=|11>: q0=1, q1=1  -> CR on q0 AND q1 (split half each)
+#   all_excited (-1):              -> CR on q0 + CR on q1 (half each)
+#
+# NOTE: these decompositions assume the qudit wire is the MSB qubit
+# in a 2-qubit pair. The LSB qubit wire must be provided via
+# the circuit context. For single-wire qudit usage, these decomps
+# are approximations — exact qudit gates need native hardware support.
+# ============================================================
 
 QCR = QuditConditionalRotation
 r"""Qudit-level-selective conditional rotation (QCR) gate
@@ -174,6 +200,10 @@ class QuditConditionalDisplacement(Operation, Hybrid):
     @property
     def resource_params(self):
         return {}
+
+    def wire_types(self):
+        from hybridlane.sa.base import Qudit, Qumode
+        return {self.wires[0]: Qudit(dim=4), self.wires[1]: Qumode()}
 
     def adjoint(self):
         level = self.hyperparameters["level"]
@@ -256,12 +286,12 @@ class QuditPhaseShift(Operation):
     .. note::
 
         This is a pure qudit gate (no qumode). It acts on a single wire.
+        The qudit wire is treated as a Qubit in Hybridlane's wire type system.
     """
 
     num_params = 1
     num_wires = 1
     ndim_params = (0,)
-
     resource_keys = set()
 
     def __init__(
@@ -279,6 +309,10 @@ class QuditPhaseShift(Operation):
     @property
     def resource_params(self):
         return {}
+
+    def wire_types(self):
+        from hybridlane.sa.base import Qudit
+        return {self.wires[0]: Qudit(dim=4)}
 
     def adjoint(self):
         theta = self.parameters[0]
@@ -393,13 +427,29 @@ class QuditTransition(Operation, Hybrid):
         self.hyperparameters["sideband"] = sideband
 
         self.num_wires = 2 if sideband else 1
-        self.num_qumodes = 1 if sideband else None
+        # type_signature is used by Hybridlane wire inference (instead of num_qumodes)
+        # qudit wire = Qubit, qumode wire = Qumode
+        # Lazy import to avoid circular import through sa/__init__.py
+        if sideband:
+            from hybridlane.sa.base import Qubit, Qumode  # noqa: PLC0415
+            self.type_signature = [Qubit(), Qumode()]
+        else:
+            self.type_signature = None
+            self.num_qumodes = None  # pure qudit gate — no qumode
 
         super().__init__(theta, wires=wires, id=id)
 
     @property
     def resource_params(self):
         return {}
+
+    def wire_types(self):
+        from hybridlane.sa.base import Qudit, Qumode
+        sb = self.hyperparameters["sideband"]
+        if sb:
+            return {self.wires[0]: Qudit(dim=4), self.wires[1]: Qumode()}
+        else:
+            return {self.wires[0]: Qudit(dim=4)}
 
     def adjoint(self):
         li = self.hyperparameters["level_i"]

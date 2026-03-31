@@ -74,8 +74,16 @@ hybrid_gate_map: dict[str, str | None] = {
 
 misc_gate_map = {"Barrier": "barrier"}
 
+# Qudit gates — handled via matrix exponentiation in simulate.py
+qudit_gate_map: dict[str, str] = {
+    "QuditConditionalRotation":    "qudit_unitary",
+    "QuditConditionalDisplacement": "qudit_unitary",
+    "QuditTransition":             "qudit_unitary",
+    "QuditPhaseShift":             "qudit_unitary",
+}
+
 supported_operations = set(
     k
-    for k, v in (dv_gate_map | cv_gate_map | hybrid_gate_map | misc_gate_map).items()
+    for k, v in (dv_gate_map | cv_gate_map | hybrid_gate_map | misc_gate_map | qudit_gate_map).items()
     if v is not None
 )

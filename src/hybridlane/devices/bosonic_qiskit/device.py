@@ -257,8 +257,17 @@ def _infer_truncation(
     if sa_result.qumodes and max_fock_level is None:
         return None
 
-    qumodes = {w: max_fock_level for w in sa_result.qumodes}
-    qubits = {w: 2 for w in sa_result.qubits}
+    from hybridlane.sa.base import Qudit as _Qudit
+    # Identify qudit wires explicitly
+    qudit_wires = {w: t.dim for w, t in sa_result.wire_types.items()
+                   if isinstance(t, _Qudit)}
+    # Exclude qudit wires from qumodes and qubits
+    qumodes = {w: max_fock_level for w in sa_result.qumodes
+               if w not in qudit_wires}
+    qubits  = {w: 2 for w in sa_result.qubits
+               if w not in qudit_wires}
 
-    truncation = FockTruncation.all_fock_space(sa_result.wire_order, qumodes | qubits)
+    truncation = FockTruncation.all_fock_space(
+        sa_result.wire_order, qumodes | qubits | qudit_wires
+    )
     return truncation

@@ -126,7 +126,12 @@ def _draw_icons(
     icons = []
     colors = []
     for wire_label in wire_map:
-        icons.append("qumode" if wire_label in sa_res.qumodes else "qubit")
+        if wire_label in sa_res.qumodes:
+            icons.append("qumode")
+        elif wire_label in sa_res.qudits:
+            icons.append("qubit")  # qudit displayed as qubit icon for now
+        else:
+            icons.append("qubit")
         colors.append(wire_colors[wire_label])
 
     drawer.wire_icons(icons, colors)
@@ -213,5 +218,9 @@ def _get_default_colors(
             result[wire] = default_qubit_color
         elif wire in sa_res.qumodes:
             result[wire] = default_qumode_color
+        elif wire in sa_res.qudits:
+            result[wire] = default_qubit_color  # qudit uses qubit color
+        else:
+            result[wire] = default_qubit_color  # fallback
 
     return result
