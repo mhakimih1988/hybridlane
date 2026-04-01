@@ -488,8 +488,9 @@ def apply_gate(qc: bq.CVCircuit, regmapper: RegisterMapping, op: Operator):
                 qmr = regmapper.get(w)
                 qumode_qubits.extend([qc.qubits[i] for i in qc.get_qubit_indices(qmr)])
 
-        # Order: qudit qubits first, then qumode qubits
-        all_qubits = qudit_qubits + qumode_qubits
+        # Order: qumode qubits first (LSB in Qiskit), then qudit qubits (MSB)
+        # This matches numpy kron(qudit_op, mode_op) where qudit=MSB, mode=LSB
+        all_qubits = qumode_qubits + qudit_qubits
         qc.unitary(mat, all_qubits)
 
     elif isinstance(op, QuditPhaseShift):
