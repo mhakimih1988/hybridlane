@@ -613,6 +613,18 @@ def sampled_measurement(
                 np.uint32
             )  # this should be sufficient width
 
+        # Qudit (level register encoded as ceil(log2(dim)) qubits).
+        # Combine the underlying qubits into an integer level index in
+        # {0, ..., dim-1}, matching the encoding used internally by
+        # `register_mapping.py` (binary, little-endian).
+        elif wire in regmapper.sa_res.qudits:
+            indices = qc.get_qubit_indices(qubits)
+            bitstrings = qiskit_samples.slice_bits(indices)
+            factor = 2 ** np.arange(bitstrings.num_bits, dtype=int)
+            data = bitstrings.to_bool_array(order="little")
+            level_values = np.sum(data * factor, axis=-1).reshape(shots)
+            basis_states[wire] = level_values.astype(np.uint32)
+
         # Qubit, just grab the relevant values
         else:
             index = qc.get_qubit_index(qubits)

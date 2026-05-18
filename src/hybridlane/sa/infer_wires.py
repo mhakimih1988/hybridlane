@@ -22,6 +22,7 @@ from ..measurements import (
     StateMeasurement,
 )
 from ..ops import QubitConditioned
+from ..ops.hybrid.observables_qudit import QuditLevelProjector
 from ..ops.mixins import Hybrid, Spectral
 from .base import (
     BasisSchema,
@@ -156,6 +157,13 @@ def _(op: Controlled | ControlledOp | QubitConditioned):
     return wire_types
 
 
+@_infer_wire_types_from_operator.register
+def _(op: QuditLevelProjector):
+    # Pi_l = |l><l| acts on a Qudit wire of the operator's declared dim.
+    dim = op.hyperparameters["dim"]
+    return {w: Qudit(dim=dim) for w in op.wires}
+
+
 def _infer_wire_types_from_measurement(
     m: MeasurementProcess,
 ) -> dict[WiresLike, WireType]:
@@ -226,6 +234,14 @@ def infer_schema_from_observable(obs: Operator) -> BasisSchema:
 
     # Qubit observables are automatically discrete
     elif obs.pauli_rep is not None:
+        return BasisSchema({obs.wires: ComputationalBasis.Discrete})
+
+    # Qudit-level projectors |l><l| are diagonal in the qudit
+    # computational basis {|0>, ..., |d-1>}. Sampling them only requires
+    # measuring the qudit's underlying qubits in the Z basis and combining
+    # the bitstring into a level index -- handled in
+    # devices/bosonic_qiskit/simulate.py:sampled_measurement.
+    elif isinstance(obs, QuditLevelProjector):
         return BasisSchema({obs.wires: ComputationalBasis.Discrete})
 
     raise StaticAnalysisError(
