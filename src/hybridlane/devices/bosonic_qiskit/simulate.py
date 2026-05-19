@@ -31,6 +31,11 @@ from hybridlane.ops.hybrid.parametric_ops_qudit import (
     QuditPhaseShift,
     QuditTransition,
 )
+from hybridlane.channels.stinespring_qudit import (
+    ControlledQuditSwapRG,
+    QubitReset,
+    QuditFlagFlip,
+)
 
 from ... import sa, util
 from ...sa.base import Qudit as _QuditType  # for isinstance check
@@ -386,6 +391,28 @@ def _qudit_gate_unitary_compute(op: Operator, truncation) -> np.ndarray:
         U[level, level] = np.exp(-1j * theta)
         return U
 
+    elif isinstance(op, QuditFlagFlip):
+        # Matrix kron(qudit, flag): qudit MSB, flag LSB.
+        # U = (I - Pi_l) (x) I_2 + Pi_l (x) X
+        level = op.hyperparameters["level"]
+        I_qb  = np.eye(2, dtype=complex)
+        X_qb  = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+        P     = projector(level)
+        I_q   = np.eye(dim_q, dtype=complex)
+        return np.kron(I_q - P, I_qb) + np.kron(P, X_qb)
+
+    elif isinstance(op, ControlledQuditSwapRG):
+        # Matrix kron(control_qb, qudit): control MSB, qudit LSB.
+        # U = |0><0|_c (x) I_q + |1><1|_c (x) SWAP_{0,R}_q
+        R = op.hyperparameters["target_level"]
+        Swap_q = np.eye(dim_q, dtype=complex)
+        Swap_q[0, 0] = 0.0; Swap_q[R, R] = 0.0
+        Swap_q[0, R] = 1.0; Swap_q[R, 0] = 1.0
+        P0 = np.array([[1.0, 0.0], [0.0, 0.0]], dtype=complex)
+        P1 = np.array([[0.0, 0.0], [0.0, 1.0]], dtype=complex)
+        I_q = np.eye(dim_q, dtype=complex)
+        return np.kron(P0, I_q) + np.kron(P1, Swap_q)
+
     else:
         raise DeviceError(f"Unknown qudit gate {op.name}")
 
@@ -502,6 +529,41 @@ def apply_gate(qc: bq.CVCircuit, regmapper: RegisterMapping, op: Operator):
             reg = regmapper.get(w)
             qudit_qubits.extend(reg if isinstance(reg, list) else [reg])
         qc.unitary(mat, qudit_qubits)
+
+    elif isinstance(op, (QuditFlagFlip, ControlledQuditSwapRG)):
+        # Hybrid qudit-qubit gate: apply via full unitary matrix.
+        # Wire layout:
+        #   QuditFlagFlip(wires=[qudit, flag])         -> kron(qudit, flag)
+        #   ControlledQuditSwapRG(wires=[ctrl, qudit]) -> kron(ctrl,  qudit)
+        # In qiskit's little-endian convention the LSB tensor factor comes
+        # first in the unitary() qubit-arg list and the MSB last.
+        wire_types = op.wire_types()
+        mat = _qudit_gate_unitary(op, regmapper.truncation)
+
+        qudit_qubits = []
+        qubit_qubits = []
+        for w in op.wires:
+            reg = regmapper.get(w)
+            tgt = qudit_qubits if isinstance(wire_types[w], _QuditType) else qubit_qubits
+            tgt.extend(reg if isinstance(reg, list) else [reg])
+
+        if isinstance(op, QuditFlagFlip):
+            # kron(qudit, flag) -> flag (LSB) first, qudit (MSB) last
+            all_qubits = qubit_qubits + qudit_qubits
+        else:
+            # ControlledQuditSwapRG: kron(ctrl, qudit) -> qudit (LSB) first, ctrl (MSB) last
+            all_qubits = qudit_qubits + qubit_qubits
+        qc.unitary(mat, all_qubits)
+
+    elif isinstance(op, QubitReset):
+        # Mid-circuit |0>-reset on a single qubit. In qiskit-aer this is
+        # implemented as a measure-then-flip channel: the outcome itself is
+        # discarded (no classical register read out), so the qubit can be
+        # reused.
+        (w,) = op.wires
+        reg = regmapper.get(w)
+        qb = reg[0] if isinstance(reg, list) else reg
+        qc.reset(qb)
 
     else:
         raise DeviceError(f"Unsupported operation {op.name}")

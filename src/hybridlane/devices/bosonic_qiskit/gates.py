@@ -80,6 +80,10 @@ qudit_gate_map: dict[str, str] = {
     "QuditConditionalDisplacement": "qudit_unitary",
     "QuditTransition":             "qudit_unitary",
     "QuditPhaseShift":             "qudit_unitary",
+    # Stinespring channel primitives (hybridlane.channels.stinespring_qudit)
+    "QuditFlagFlip":               "qudit_unitary",
+    "ControlledQuditSwapRG":       "qudit_unitary",
+    "QubitReset":                  "qubit_reset",
 }
 
 supported_operations = set(
